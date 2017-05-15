@@ -1,0 +1,100 @@
+/* Сначала убедимся что аудит включён */
+select name,value from v$parameter where name like 'audit%';
+/* Видим что audit_trail = db, если не видим то выполняем эту команду  
+ALTER SYSTEM SET audit_trail='db' SCOPE=SPFILE; 
+и перезапускаем базу
+*/
+
+/* Проверим наличие того, что какие-нибудь привилегии или выражения уже используются для аудита */
+select * from dba_stmt_audit_opts union select * from dba_priv_audit_opts;
+
+/* Синтаксис команды для настроки аудита */
+audit {statement_option|privilege_option}
+ [by user] [by 
+{session|access}] [ whenever 
+{successful|unsuccessful}]
+
+/* Настроим аудит для всех действий по созданию/изменению (create/alter) объектов БД для пользователя TestUser2 */
+audit create any table by TestUser2;
+Audit succeeded.
+audit create role by TestUser2;
+Audit succeeded.
+audit create view by TestUser2;
+Audit succeeded.
+audit create procedure by TestUser2;
+Audit succeeded.
+audit CREATE LIBRARY by TestUser2;
+Audit succeeded.
+
+audit alter any table by TestUser2;
+Audit succeeded.
+audit alter any role by TestUser2;
+Audit succeeded.
+audit alter any procedure by TestUser2;
+Audit succeeded.
+
+/* Генерируем сообщения в журнале аудита, путём создания 10000 таблиц от пользователя TestUser2 */
+begin
+for i in 101..10000 loop
+execute IMMEDIATE 'CREATE TABLE t_'||i||' (c1 NUMBER PRIMARY KEY, c2 VARCHAR2(50))';
+end loop;
+end;
+/
+
+/* Тут возникла проблема: в журнал аудита sys.aud$ не записывались записи об аудируемых действиях. 
+Проблему решила следующая команда */
+truncate table sys.aud$;
+
+/* Смотрим что записалось в журнал аудита */
+select count(*) from dba_audit_trail where username='TESTUSER2' and action=1;
+
+/* Добавляем политику аудита на объект(в данном случае таблицу t5) при действиях insert,update,delete,select */
+begin
+DBMS_FGA.ADD_POLICY(object_schema => 'TESTUSER2',
+object_name => 't5',
+policy_name => 'chk_hr_emp',
+audit_condition => '',
+audit_column => '',
+statement_types => 'insert,update,delete,select',
+handler_schema => 'sec',
+handler_module => 'log_id',
+enable => TRUE)
+;
+end;
+/
+
+/* Выполняем одно из аудируемых действий над объектом t5 */
+select * from t5;
+
+/* Смотрим в соответствующее представление, чтобы убедиться что действия над объектом подвергаются аудиту */
+select timestamp, 
+   db_user,
+   os_user,
+   object_schema,
+   object_name,
+   sql_text
+from dba_fga_audit_trail;
+
+/* Удаляем политику аудита */
+begin
+DBMS_FGA.DROP_POLICY(object_schema => 'TESTUSER2',
+object_name => 't5',
+policy_name => 'chk_hr_emp')
+;
+end;
+/
+
+
+/* a)  */
+audit delete any table by TestUser2 WHENEVER NOT SUCCESSFUL;
+
+/* b)  */
+http://alldba.ru/index.php/stati/oracle/89-oracle-1
+select * from dba_users;
+audit table by TestUser2;
+select *from dba_audit_trail where username='TESTUSER2';
+truncate table sys.aud$;
+select * from dba_common_audit_trail where db_user='TESTUSER2';
+show spPARAMETERs aud
+SELECT audit_option FROM dba_stmt_audit_opts;
+ALTER SYSTEM SET audit_sys_operations=true SCOPE=SPFILE;
